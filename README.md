@@ -23,6 +23,7 @@ python3, curl and getfattr.
 | `faults.bats` | What a pull does when the source misbehaves. |
 | `ordering.bats` | A pull must give the right file whatever the order in which the ranges arrive, and when one stream is slow. |
 | `checksum.bats` | The checksum XRootD computes while the file is written: stored at the end of a pull, and different from the source's when the source sent wrong data. |
+| `markers.bats` | The performance markers sent during a pull list each connection once. |
 | `run.sh` | Runs the quick or the full suite and compares the failures with `known-failures.txt`. |
 | `known-failures.txt` | Tests that fail today because of a known defect. |
 | `bdp/measure.sh` | Throughput of a pull over an emulated long path (delay and rate limit), by number of streams. |
