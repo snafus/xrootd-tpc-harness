@@ -42,9 +42,31 @@ dst_data_dir() {
 }
 
 # launch_destination [CONFIGURATION]
+#
+# Without an argument the destination runs with dst.cfg, or with real-time
+# checksums (dst-cksrt.cfg) when TPC_CHECKSUM is set.  Every pull that
+# succeeds is then also required to have stored the right checksum.
 launch_destination() {
+	dst_config=${1:-dst.cfg}
+	[[ $# -gt 0 || -z "${TPC_CHECKSUM:-}" ]] || dst_config=dst-cksrt.cfg
 	mkdir -p "$BATS_TEST_TMPDIR/xrootd_dst" "$(dst_data_dir)"
-	DATA=$(dst_data_dir) PORT=$DST_PORT launch_xrootd "${1:-dst.cfg}" xrootd_dst
+	DATA=$(dst_data_dir) PORT=$DST_PORT launch_xrootd "$dst_config" xrootd_dst
+}
+
+# Whether the destination computes a checksum while it writes a file.
+checksums_on() {
+	[[ "${dst_config:-}" == dst-cksrt.cfg ]]
+}
+
+# stored_checksum_state NAME SIZE: ok, wrong or absent.
+stored_checksum_state() {
+	if ! has_stored_checksum "$1"; then
+		echo absent
+	elif [[ "$(reported_adler32 "$1")" == "$(expected_adler32 "$2")" ]]; then
+		echo ok
+	else
+		echo wrong
+	fi
 }
 
 # Stop the source and the destination and remove what the test stored outside
@@ -138,6 +160,8 @@ record() {
 #   outcome  success | failure | no-verdict
 #   content  ok | <description of the mismatch> | absent
 #   message  the final line of the response
+#   checksum ok | wrong | absent: the checksum stored with the file, after a
+#            success on a destination with real-time checksums; off otherwise
 # The result is also appended to the survey file.
 pull_and_classify() {
 	local source=$1 name=$2 size=$3 streams=$4 body began
@@ -159,7 +183,12 @@ pull_and_classify() {
 		content=absent
 	fi
 
-	record "$outcome" "content=$content" "seconds=$((SECONDS - began))" "$(source_stats)" "| $message"
+	checksum=off
+	if [[ "$outcome" == success ]] && checksums_on; then
+		checksum=$(stored_checksum_state "$name" "$size")
+	fi
+
+	record "$outcome" "content=$content" "checksum=$checksum" "seconds=$((SECONDS - began))" "$(source_stats)" "| $message"
 }
 
 # The one property every pull must have, whatever the source does: it ends
@@ -170,6 +199,9 @@ assert_safe() {
 	fi
 	if [[ "$outcome" == success && "$content" != ok ]]; then
 		fail "the pull reported success for a wrong file: $content"
+	fi
+	if [[ "$outcome" == success ]] && checksums_on && [[ "$checksum" != ok ]]; then
+		fail "the pull succeeded but the checksum stored with the file is $checksum"
 	fi
 }
 

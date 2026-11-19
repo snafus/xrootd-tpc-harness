@@ -41,7 +41,7 @@ pull() {
 }
 
 @test "without real-time checksums nothing is stored by the pull" {
-	launch_destination
+	launch_destination dst.cfg
 	pull 4
 	assert_pull_succeeded
 	! has_stored_checksum file_dst

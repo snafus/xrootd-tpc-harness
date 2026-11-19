@@ -67,6 +67,7 @@ DOCKER_ARGS="--privileged -u 0" docker/dev.sh run bdp/measure.sh /path/to/result
 | `XROOTD_SRC` | An XRootD source tree. Used by `docker/dev.sh` to build, and for the bats it carries in `vendor/`. |
 | `BATS` | The bats program to use. |
 | `TPC_DEST_DIR` | Directory in which the destination server keeps its files. Set it to test another storage, for example a CephFS mount. Each test makes its own directory there and removes it. |
+| `TPC_CHECKSUM` | If set, the destination computes a checksum while it writes (`ofs.cksrt`, configuration `dst-cksrt.cfg`), and every pull that succeeds must also have stored the right checksum with the file. The full suite does this by itself for `matrix.bats` and `faults.bats`. |
 | `TPC_SURVEY` | A file to which every pull appends one line: its outcome, whether the destination file is correct, the time taken, and how many requests and connections the source saw. |
 | `BATS_SKIP_SERVER_LOGS` | Set it to leave the server logs out of the report of a failed test. |
 
@@ -77,7 +78,7 @@ Settings can also be written in the file `local.env`, which is not committed.
 | Level | When | Contents |
 |-------|------|----------|
 | Quick (about 30 s) | After every change | Unit tests, when a build tree is given; pulls of files up to 48 MiB with 1 and 4 streams; every fault test that needs no waiting; three ordering tests; the checksum tests. |
-| Full (about 4 minutes) | Before a commit | The quick suite, plus the tests tagged `slow` (2 and 10 streams, 256 MiB and 1 GiB files, faults that involve a timeout, more ordering seeds, a slow connection, the run-ahead limit) and the upstream TPC tests. |
+| Full (about 4 minutes) | Before a commit | The quick suite, plus the tests tagged `slow` (2 and 10 streams, 256 MiB and 1 GiB files, faults that involve a timeout, more ordering seeds, a slow connection, the run-ahead limit) the matrix and the fault suites a second time with real-time checksums on, and the upstream TPC tests. |
 | Measurement | On demand | `bdp/measure.sh`. It gives numbers, not a pass or fail, and takes from several minutes to an hour. |
 
 A test belongs to the full suite only if it is tagged: `# bats test_tags=slow`

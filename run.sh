@@ -13,6 +13,10 @@
 #   BATS           the bats program to use (1.11 or later)
 #   TPC_DEST_DIR   directory for the destination files, to test another
 #                  storage (for example a CephFS mount)
+#   TPC_CHECKSUM   if set, the destination computes a checksum while it writes
+#                  (ofs.cksrt) and every successful pull must have stored the
+#                  right one.  The full run does this by itself for the matrix
+#                  and the fault suites.
 #
 # In the development container: docker/dev.sh test [quick|full]
 #
@@ -37,13 +41,14 @@ for program in xrootd "$BATS" python3 curl getfattr; do
 done
 LOG=$(mktemp -d /tmp/tpc-tests.XXXXXX)
 SUITES=(matrix.bats faults.bats ordering.bats checksum.bats markers.bats setup-failure.bats)
+CHECKSUM_SUITES=(matrix.bats faults.bats)
 status=0
 began=$SECONDS
 
 case "$MODE" in
 quick) filter=(--filter-tags '!slow') ;;
 full) filter=() ;;
-*) sed -n '2,20p' "${BASH_SOURCE[0]}"; exit 2 ;;
+*) sed -n '2,21p' "${BASH_SOURCE[0]}"; exit 2 ;;
 esac
 
 step() { printf '%-28s ' "$1"; }
@@ -63,37 +68,53 @@ for binary in "${units[@]}"; do
 done
 
 # -- functional tests ---------------------------------------------------------
-step "functional ($MODE)"
-(cd "$HERE" && "$BATS" --tap "${filter[@]}" "${SUITES[@]}") >"$LOG/bats.tap" 2>&1
+# functional LABEL TAG SUITE...: run the suites and compare the failures with
+# the known ones.  The caller sets the environment of the tests.
+functional() {
+	local label=$1 tag=$2
+	shift 2
 
-# Names of the tests that ran, and of those that failed.
-sed -nE 's/^(not )?ok [0-9]+ //p' "$LOG/bats.tap" | sed -E 's/ # skip.*$//' | sort >"$LOG/ran"
-sed -nE 's/^not ok [0-9]+ //p' "$LOG/bats.tap" | sort >"$LOG/failed"
+	step "$label"
+	(cd "$HERE" && "$BATS" --tap "${filter[@]}" "$@") >"$LOG/$tag.tap" 2>&1
+
+	# Names of the tests that ran, and of those that failed.
+	sed -nE 's/^(not )?ok [0-9]+ //p' "$LOG/$tag.tap" | sed -E 's/ # skip.*$//' | sort >"$LOG/ran"
+	sed -nE 's/^not ok [0-9]+ //p' "$LOG/$tag.tap" | sort >"$LOG/failed"
+	comm -12 "$LOG/known" "$LOG/ran" >"$LOG/expected"
+	comm -23 "$LOG/failed" "$LOG/expected" >"$LOG/new"
+	comm -13 "$LOG/failed" "$LOG/expected" >"$LOG/fixed"
+
+	echo "$(wc -l <"$LOG/ran") run, $(wc -l <"$LOG/failed") failed, $(wc -l <"$LOG/expected") known failures"
+	if [[ ! -s "$LOG/ran" ]]; then
+		echo "  no test ran:"
+		sed 's/^/    /' "$LOG/$tag.tap" | head -20
+		status=1
+	fi
+	if [[ -s "$LOG/new" ]]; then
+		echo "  NEW FAILURES:"
+		sed 's/^/    /' "$LOG/new"
+		status=1
+	fi
+	if [[ -s "$LOG/fixed" ]]; then
+		echo "  NOW PASSING (remove from known-failures.txt):"
+		sed 's/^/    /' "$LOG/fixed"
+		status=1
+	fi
+}
+
 grep -vE '^(#|$)' "$HERE/known-failures.txt" | sort >"$LOG/known"
-comm -12 "$LOG/known" "$LOG/ran" >"$LOG/expected"
-comm -23 "$LOG/failed" "$LOG/expected" >"$LOG/new"
-comm -13 "$LOG/failed" "$LOG/expected" >"$LOG/fixed"
 
-echo "$(wc -l <"$LOG/ran") run, $(wc -l <"$LOG/failed") failed, $(wc -l <"$LOG/expected") known failures"
-if [[ ! -s "$LOG/ran" ]]; then
-	echo "  no test ran:"
-	sed 's/^/    /' "$LOG/bats.tap" | head -20
-	status=1
-fi
+functional "functional ($MODE)" bats "${SUITES[@]}"
 if [[ "$MODE" == full && -n "$(comm -23 "$LOG/known" "$LOG/ran")" ]]; then
 	echo "  LISTED IN known-failures.txt BUT NOT A TEST:"
 	comm -23 "$LOG/known" "$LOG/ran" | sed 's/^/    /'
 	status=1
 fi
-if [[ -s "$LOG/new" ]]; then
-	echo "  NEW FAILURES:"
-	sed 's/^/    /' "$LOG/new"
-	status=1
-fi
-if [[ -s "$LOG/fixed" ]]; then
-	echo "  NOW PASSING (remove from known-failures.txt):"
-	sed 's/^/    /' "$LOG/fixed"
-	status=1
+
+# The same pulls on a destination that computes a checksum while it writes:
+# every pull that succeeds must also have stored the right checksum.
+if [[ "$MODE" == full ]]; then
+	TPC_CHECKSUM=1 functional "with real-time checksums" bats-cksrt "${CHECKSUM_SUITES[@]}"
 fi
 
 # -- upstream TPC tests -------------------------------------------------------
