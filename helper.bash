@@ -173,6 +173,13 @@ assert_safe() {
 	fi
 }
 
+# assert_failed_because TEXT: the pull failed and its verdict gives the reason.
+assert_failed_because() {
+	assert_safe
+	[[ "$outcome" == failure ]] || fail "the pull did not fail: $message"
+	[[ "$message" == *"$1"* ]] || fail "the verdict does not say '$1': $message"
+}
+
 assert_pull_succeeded() {
 	assert_safe
 	[[ "$outcome" == success ]] || fail "the pull failed: $message"

@@ -35,25 +35,30 @@ pull_with_fault() {
 
 @test "safe when the source ignores Range and sends the whole file" {
 	pull_with_fault "fault=norange"
-	assert_safe
+	assert_failed_because "did not return the requested range"
 	assert_destination_alive
 }
 
 @test "safe when the source ignores Range once" {
 	pull_with_fault "fault=norange&times=1&at=$((20 * MIB))"
-	assert_safe
+	assert_failed_because "did not return the requested range"
 	assert_destination_alive
+}
+
+@test "a source that ignores Range still serves a file that is one range" {
+	pull_and_classify "/f/$((3 * MIB))/t?fault=norange" file_dst $((3 * MIB)) "$STREAMS"
+	assert_pull_succeeded
 }
 
 @test "safe when the source answers with another range than asked" {
 	pull_with_fault "fault=wrongrange&times=1&at=$((20 * MIB))"
-	assert_safe
+	assert_failed_because "did not return the requested range"
 	assert_destination_alive
 }
 
 @test "safe when the source answers with a shorter range than asked" {
 	pull_with_fault "fault=short&by=1000&times=1&at=$((20 * MIB))"
-	assert_safe
+	assert_failed_because "did not return the requested range"
 	assert_destination_alive
 }
 
