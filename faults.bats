@@ -63,17 +63,10 @@ pull_with_fault() {
 	assert_destination_alive
 }
 
-@test "safe when the source sends the data of another offset" {
-	pull_with_fault "fault=shift&times=1&at=$((20 * MIB))"
-	assert_safe
-	assert_destination_alive
-}
-
-@test "safe when one bit of the data is corrupted" {
-	pull_with_fault "fault=corrupt&at=$((20 * MIB))"
-	assert_safe
-	assert_destination_alive
-}
+# A source that sends wrong bytes of the right length (the data of another
+# offset, a corrupted bit) is not tested here.  The TPC handler does not check
+# the content it receives, by decision: the checksum does, and checksum.bats
+# shows that it exposes both faults.
 
 @test "safe when the source does not announce the file size" {
 	pull_with_fault "fault=noclen"
