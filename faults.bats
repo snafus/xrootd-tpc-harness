@@ -99,9 +99,18 @@ pull_with_fault() {
 # the content it receives, by decision: the checksum does, and checksum.bats
 # shows that it exposes both faults.
 
+@test "a single-stream pull works when the source does not announce the file size" {
+	pull_and_classify "/f/${SIZE}/t?fault=noclen" file_dst "$SIZE" 1
+	assert_pull_succeeded
+}
+
 @test "safe when the source does not announce the file size" {
 	pull_with_fault "fault=noclen"
-	assert_safe
+	assert_pull_succeeded
+	# With no size there are no ranges to ask for: the file must come as one
+	# request for all of it, not as a range that ends at 2^64 - 2.
+	run -0 curl --silent "${SRC_URL}/_stats"
+	[[ "$output" != *'"range": "bytes='* ]] || fail "a range was requested: $output"
 	assert_destination_alive
 }
 
