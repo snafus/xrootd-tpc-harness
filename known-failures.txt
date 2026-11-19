@@ -1,0 +1,21 @@
+# Tests that fail today because of a known defect, by name.  run.sh succeeds
+# when exactly these tests fail.  The commit that fixes a defect removes its
+# lines.  The identifiers refer to notes/multistream-assessment.md.
+
+# B1: an empty file cannot be pulled with more than one stream
+pull of 0 bytes with 2 streams
+pull of 0 bytes with 4 streams
+pull of 0 bytes with 10 streams
+
+# B3: the bytes received are not checked against the size of the file
+safe when the last range is short because the source file shrank
+
+# A4: the content is not checked (needs a checksum from the client)
+safe when the source sends the data of another offset
+safe when one bit of the data is corrupted
+
+# A1: one transient error on one range loses the whole copy (Stage 3)
+survives one connection reset in the middle of a range
+survives one connection closed in the middle of a range
+survives one 503 answer
+survives one stalled range
