@@ -29,6 +29,9 @@ Faults are selected per request with query parameters of the source URL, e.g.
     fault=shift       answer 206 claiming the range asked, with the data found
                       1 MiB further in the file
     fault=short       answer 206 for a range by= bytes shorter than asked
+    fault=chunked     answer 206 with the right Content-Range but a chunked body
+                      and no Content-Length; the body is by= bytes shorter than
+                      the range (negative: longer; default 0, a correct answer)
     fault=corrupt     flip one bit of the byte at file offset at=
     fault=close       answer correctly but close the connection afterwards
     fault=shrink      HEAD reports <size>, GET serves a file by= bytes shorter
@@ -320,6 +323,13 @@ class Handler(BaseHTTPRequestHandler):
             headers.append(("Connection", "close"))
             self.close_connection = True
 
+        # A chunked body carries no length of its own, so the client cannot
+        # see from the framing that it is shorter or longer than the range.
+        chunked = active and fault == "chunked"
+        if chunked:
+            headers[1] = ("Transfer-Encoding", "chunked")
+            length = max(0, length - int(query.get("by", 0)))
+
         status = 206 if ranged else 200
         record["status"] = status
         self.send_response(status)
@@ -344,6 +354,8 @@ class Handler(BaseHTTPRequestHandler):
                 if flip is not None and start + sent <= flip < start + sent + count:
                     data = bytearray(data)
                     data[flip - start - sent] ^= 0x01
+                if chunked:
+                    data = b"%x\r\n" % count + bytes(data) + b"\r\n"
                 self.wfile.write(data)
                 sent += count
                 record["sent"] = sent
@@ -357,6 +369,8 @@ class Handler(BaseHTTPRequestHandler):
                 ahead = sent / rate - (time.time() - began)
                 if ahead > 0:
                     time.sleep(ahead)
+        if chunked:
+            self.wfile.write(b"0\r\n\r\n")
 
 
 class Server(ThreadingHTTPServer):

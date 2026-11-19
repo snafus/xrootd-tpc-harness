@@ -62,6 +62,32 @@ pull_with_fault() {
 	assert_destination_alive
 }
 
+# A chunked body has no length in its framing: only a count of the bytes
+# received can tell that it does not fill the range it was sent for.
+
+@test "a source that sends its ranges as chunked bodies is served" {
+	pull_with_fault "fault=chunked"
+	assert_pull_succeeded
+}
+
+@test "safe when the body of one range is shorter than the range" {
+	pull_with_fault "fault=chunked&by=1000&times=1&at=$((20 * MIB))"
+	assert_failed_because "bytes for the range"
+	assert_destination_alive
+}
+
+@test "safe when the body of the last range is shorter than the range" {
+	pull_with_fault "fault=chunked&by=1000&at=$((SIZE - 1))"
+	assert_failed_because "bytes for the range"
+	assert_destination_alive
+}
+
+@test "safe when the body of one range is longer than the range" {
+	pull_with_fault "fault=chunked&by=-1000&times=1&at=$((20 * MIB))"
+	assert_failed_because "bytes for the range"
+	assert_destination_alive
+}
+
 @test "safe when the last range is short because the source file shrank" {
 	pull_with_fault "fault=shrink&by=1000"
 	assert_safe

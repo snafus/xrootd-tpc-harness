@@ -2,7 +2,7 @@
 # when exactly these tests fail.  The commit that fixes a defect removes its
 # lines.  The identifiers refer to the assessment (multistream-assessment.md).
 #
-# The list matches branch tpc-dev-v6.2.1 of XRootD after the fixes of B1 and B2.
+# The list matches branch tpc-dev-v6.2.1 of XRootD after the fixes of B1, B2 and B3.
 
 # A1: one transient error on one range loses the whole copy (Stage 3)
 survives one connection reset in the middle of a range
