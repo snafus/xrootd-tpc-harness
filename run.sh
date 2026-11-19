@@ -36,7 +36,7 @@ for program in xrootd "$BATS" python3 curl getfattr; do
 	command -v "$program" >/dev/null || { echo "not found: $program"; exit 2; }
 done
 LOG=$(mktemp -d /tmp/tpc-tests.XXXXXX)
-SUITES=(matrix.bats faults.bats ordering.bats checksum.bats markers.bats)
+SUITES=(matrix.bats faults.bats ordering.bats checksum.bats markers.bats setup-failure.bats)
 status=0
 began=$SECONDS
 
