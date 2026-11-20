@@ -146,3 +146,12 @@ baseline_threads() {
 	wait_for_threads "$baseline" 5 || fail "$(destination_threads) threads after the failure, $baseline before"
 	assert_destination_alive
 }
+
+# libcurl calls such a transfer a success: it must not count as a block.
+@test "an answer that is neither a success nor an error fails the pull with its status" {
+	start_destination
+	pull_and_classify "/f/${SIZE}/t?fault=status&code=304&times=1&at=$((200 * MIB))" file_dst "$SIZE" "$STREAMS"
+	[[ "$outcome" == failure ]] || fail "the pull did not fail: $message"
+	[[ "$message" == *"status code 304"* ]] || fail "the verdict does not give the status: $message"
+	assert_destination_alive
+}
