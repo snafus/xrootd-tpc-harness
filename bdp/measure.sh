@@ -26,6 +26,29 @@
 #   LOSSES    share of the data packets lost, in percent (default "0")
 #   QUEUE_MS  depth of the router's queue, in ms at the link rate
 #             (default: empty, no router and a queue that never overflows)
+#   PACING    "none" and/or "fq" (default "none").  With fq the source paces
+#             its packets (the fq queue discipline); the whole delay is then
+#             applied on the way back, so the round-trip time is the same.
+#             Needs QUEUE_MS; LOSSES must be 0.
+#   BLOCKS    block sizes of the block-write test build, in MiB, "auto" for
+#             one block per stream, 0 for the present model (default "0")
+#   WRITES    write sizes of the block-write test build, in MiB (default "16")
+#   REPEAT    number of runs of each case (default 1)
+#   TUNED_MB  largest socket buffer of the "tuned" setting, in MB (default 256)
+#
+# The memory TCP may use is one budget for the whole kernel (net.ipv4.tcp_mem),
+# and here it holds both ends of every connection and the data in flight.
+# When it runs short the kernel cuts receive windows down and a transfer
+# stalls, which is a limit of the test machine and not of the path.  The peak
+# is recorded for each run (tcp_mem_peak_mb) beside the level at which the
+# kernel starts to save memory; a run that comes near it does not count.
+# Sockets of a finished run keep their memory for a minute or two, so each run
+# waits until it has been given back.
+#
+# BLOCKS and WRITES only have an effect with the test build of the block-write
+# model (branch tpc-exp-blockwrite); they set XRD_TPC_EXP_BLOCK_MIB and
+# XRD_TPC_EXP_WRITE_MIB for the destination.  A pull with one stream does not
+# use blocks, so it is run once, with block 0.
 #
 # Loss is random and applies to the direction the data travels in (source to
 # destination).  When LOSSES or QUEUE_MS is used, segmentation offload is
@@ -42,6 +65,9 @@ DURATION=${DURATION:-40}
 IDLE=${IDLE:-1}
 LOSSES=${LOSSES:-0}
 QUEUE_MS=${QUEUE_MS:-}
+PACING=${PACING:-none}
+BLOCKS=${BLOCKS:-0}
+WRITES=${WRITES:-16}
 
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 BIN="${XROOTD_BUILD:?set XROOTD_BUILD to the XRootD build tree}/bin"
@@ -61,7 +87,22 @@ as_user() { # NAMESPACE COMMAND...
 	ip netns exec "$ns" runuser -u "$USER_NAME" -- env PATH="$BIN:$PATH" "$@"
 }
 
+tcp_mem_pages() {
+	awk '/^TCP:/ {print $NF}' /proc/net/sockstat
+}
+
+# Wait until the sockets of the previous run have given their memory back.
+drain() {
+	for _ in {1..120}; do
+		(($(tcp_mem_pages) < 2500)) && return 0
+		python3 -c 'import time; time.sleep(2)'
+	done
+	echo "TCP memory still in use: $(tcp_mem_pages) pages" >&2
+}
+
 teardown() {
+	ip netns exec src ss -K -t >/dev/null 2>&1
+	ip netns exec dst ss -K -t >/dev/null 2>&1
 	pkill -x xrootd 2>/dev/null
 	for _ in {1..50}; do pgrep -x xrootd >/dev/null || break; sleep 0.1; done
 	pkill -9 -x xrootd 2>/dev/null
@@ -119,8 +160,8 @@ routed_link() {
 	ip netns exec rtr sysctl -qw net.ipv4.ip_forward=1
 }
 
-setup_network() { # RTT_MS BUFFERS LOSS
-	local half=$(($1 / 2)) buffers=$2 loss=$3 pps
+setup_network() { # RTT_MS BUFFERS LOSS PACING
+	local half=$(($1 / 2)) back=$(($1 / 2)) buffers=$2 loss=$3 pacing=$4 pps
 	local -a drop=() rate=(rate "$RATE")
 
 	ip netns add src
@@ -148,13 +189,21 @@ setup_network() { # RTT_MS BUFFERS LOSS
 	# The queue of each host is long enough to hold everything in flight: a
 	# host loses nothing unless a sender overshoots the link rate by a wide
 	# margin.
-	tc -n src qdisc add dev vsrc root netem delay "${half}ms" "${rate[@]}" limit 400000 "${drop[@]}" || return 1
-	tc -n dst qdisc add dev vdst root netem delay "${half}ms" "${rate[@]}" limit 400000 || return 1
+	if [[ "$pacing" == fq ]]; then
+		# The source paces; the destination delays its answers by the whole
+		# round-trip time.
+		[[ -n "$QUEUE_MS" && "$loss" == 0 ]] || { echo "PACING=fq needs QUEUE_MS and no loss" >&2; return 1; }
+		back=$1
+		tc -n src qdisc add dev vsrc root fq || return 1
+	else
+		tc -n src qdisc add dev vsrc root netem delay "${half}ms" "${rate[@]}" limit 400000 "${drop[@]}" || return 1
+	fi
+	tc -n dst qdisc add dev vdst root netem delay "${back}ms" "${rate[@]}" limit 400000 || return 1
 
 	ip netns exec src sysctl -qw net.ipv4.tcp_slow_start_after_idle="$IDLE"
 	if [[ "$buffers" == tuned ]]; then
-		ip netns exec src sysctl -qw net.ipv4.tcp_wmem="4096 65536 268435456"
-		ip netns exec dst sysctl -qw net.ipv4.tcp_rmem="4096 131072 268435456"
+		ip netns exec src sysctl -qw net.ipv4.tcp_wmem="4096 65536 $((TUNED_MB * 1048576))"
+		ip netns exec dst sysctl -qw net.ipv4.tcp_rmem="4096 131072 $((TUNED_MB * 1048576))"
 	fi
 }
 
@@ -164,6 +213,7 @@ launch() { # NAMESPACE NAME PORT
 	mkdir -p "$WORK/$name"
 	chown -R "$USER_NAME" "$WORK"
 	(cd "$WORK" && as_user "$ns" env RUN="$WORK" NAME="$name" PORT="$port" \
+		XRD_TPC_EXP_BLOCK_MIB="${EXP_BLOCK:-0}" XRD_TPC_EXP_WRITE_MIB="${EXP_WRITE:-16}" \
 		xrootd -b -c "$HERE/mirage.cfg" -l "$WORK/$name.log" -s "$WORK/$name.pid")
 	for _ in {1..200}; do
 		grep -qsE '^------ xrootd .* initialization completed' "$WORK/$name.log" && return 0
@@ -224,15 +274,44 @@ print("%.1f\t%.1f\t%.1f\t%d\t%d\t%d\t%.4f" % (overall, steady, last, len(ports),
 PY
 }
 
-run_one() { # RTT BUFFERS STREAMS LOSS
-	local rtt=$1 buffers=$2 streams=$3 loss=$4 tag="rtt${1}-${2}-s${3}"
+# CPU time used so far by each thread of a server, in clock ticks: "tid ticks".
+thread_ticks() { # NAME
+	local pid stat
+	pid=$(<"$WORK/$1.pid") || return 0
+	for stat in /proc/"$pid"/task/*/stat; do
+		# the fields after the command name, which is in parentheses
+		sed -E 's/^([0-9]+) \(.*\) /\1 /' "$stat" 2>/dev/null | awk '{print $1, $13 + $14}'
+	done
+}
+
+# cpu_use BEFORE AFTER SECONDS -> "busiest_thread_pct all_threads_pct" of one core
+cpu_use() {
+	python3 - "$1" "$2" "$3" "$(getconf CLK_TCK)" <<'PY'
+import sys
+def load(path):
+    return {t: int(v) for t, v in (line.split() for line in open(path) if line.strip())}
+before, after = load(sys.argv[1]), load(sys.argv[2])
+seconds, tick = float(sys.argv[3]), float(sys.argv[4])
+used = [after[t] - before.get(t, 0) for t in after]
+scale = 100.0 / tick / seconds if seconds > 0 else 0
+print("%.0f\t%.0f" % (max(used, default=0) * scale, sum(used) * scale))
+PY
+}
+
+run_one() { # RTT BUFFERS STREAMS LOSS PACING BLOCK WRITE
+	local rtt=$1 buffers=$2 streams=$3 loss=$4 pacing=$5 block=$6 write=$7
+	local tag="rtt${1}-${2}-s${3}" began elapsed
 	local -a header=()
+	export EXP_BLOCK=$block EXP_WRITE=$write
 
 	[[ "$loss" != 0 ]] && tag+="-loss$loss"
 	[[ -n "$QUEUE_MS" ]] && tag+="-q$QUEUE_MS"
+	[[ "$pacing" != none ]] && tag+="-$pacing"
+	[[ "$block" != 0 ]] && tag+="-b${block}-w${write}"
 	teardown
-	rm -rf "$WORK/xrootd_src" "$WORK/xrootd_dst" "$WORK"/*.log "$WORK"/*.pid
-	setup_network "$rtt" "$buffers" "$loss" || { echo "cannot set up the network" >&2; return 1; }
+	drain
+	rm -rf "$WORK/xrootd_src" "$WORK/xrootd_dst" "$WORK"/*.log "$WORK"/*.pid "$WORK"/*.mem
+	setup_network "$rtt" "$buffers" "$loss" "$pacing" || { echo "cannot set up the network" >&2; return 1; }
 	launch src xrootd_src "$SRC_PORT" || return 1
 	launch dst xrootd_dst "$DST_PORT" || return 1
 
@@ -245,13 +324,26 @@ run_one() { # RTT BUFFERS STREAMS LOSS
 	( while :; do
 		echo "@ $(date +%s.%N)"
 		ip netns exec src ss -tin "sport = :$SRC_PORT"
+		tcp_mem_pages >>"$WORK/$tag.mem"
 		sleep 0.5
 	done ) >"$WORK/$tag.cwnd" 2>/dev/null &
 	local sampler=$!
 
+	thread_ticks xrootd_dst >"$WORK/$tag.dst0"
+	thread_ticks xrootd_src >"$WORK/$tag.src0"
+	began=$(date +%s.%N)
 	as_user dst curl -sS -N --max-time "$DURATION" -X COPY \
 		-H "Source: http://$SRC_IP:$SRC_PORT/big" "${header[@]}" \
 		"http://$DST_IP:$DST_PORT/out" >"$WORK/$tag.markers" 2>"$WORK/$tag.err"
+	elapsed=$(python3 -c "import sys, time; print(time.time() - float(sys.argv[1]))" "$began")
+	thread_ticks xrootd_dst >"$WORK/$tag.dst1"
+	# Times the destination's kernel ran out of room for received data and
+	# cut a receive window down, and the smallest window the source was left with.
+	local pruned mem_peak
+	mem_peak=$(sort -n "$WORK/$tag.mem" 2>/dev/null | tail -1)
+	mem_peak=$((${mem_peak:-0} * 4096 / 1000000))
+	pruned=$(ip netns exec dst nstat -az TcpExtPruneCalled 2>/dev/null | awk '$1 == "TcpExtPruneCalled" {print $2}')
+	thread_ticks xrootd_src >"$WORK/$tag.src1"
 
 	kill "$sampler" 2>/dev/null
 	wait "$sampler" 2>/dev/null
@@ -260,19 +352,42 @@ run_one() { # RTT BUFFERS STREAMS LOSS
 		cp "$WORK/$tag.router" "$(dirname "$RESULTS")/" 2>/dev/null
 	fi
 
-	printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$rtt" "$buffers" "$loss" "${QUEUE_MS:-deep}" "$streams" \
-		"$(summarise "$WORK/$tag.markers" "$WORK/$tag.cwnd")" | tee -a "$RESULTS"
+	printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$rtt" "$buffers" "$loss" "${QUEUE_MS:-deep}" \
+		"$pacing" "$block" "$write" "$streams" \
+		"$(summarise "$WORK/$tag.markers" "$WORK/$tag.cwnd")" \
+		"$(cpu_use "$WORK/$tag.dst0" "$WORK/$tag.dst1" "$elapsed")" \
+		"$(cpu_use "$WORK/$tag.src0" "$WORK/$tag.src1" "$elapsed")" "${pruned:-?}" "$mem_peak" | tee -a "$RESULTS"
 	cp "$WORK/$tag.markers" "$WORK/$tag.cwnd" "$(dirname "$RESULTS")/" 2>/dev/null
 	return 0
 }
 
-printf 'rtt_ms\tbuffers\tloss_pct\tqueue_ms\tstreams\tMB/s_overall\tMB/s_after_10s\tMB/s_last_30s\tconnections\tcwnd_median\tcwnd_min\tretrans_pct\n' >"$RESULTS"
+REPEAT=${REPEAT:-1}
+TUNED_MB=${TUNED_MB:-256}
+printf 'rtt_ms\tbuffers\tloss_pct\tqueue_ms\tpacing\tblock_mib\twrite_mib\tstreams\tMB/s_overall\tMB/s_after_10s\tMB/s_last_30s\tconnections\tcwnd_median\tcwnd_min\tretrans_pct\tdst_thread_cpu\tdst_cpu\tsrc_thread_cpu\tsrc_cpu\tdst_rcv_pruned\ttcp_mem_peak_mb\n' >"$RESULTS"
+# net.ipv4.tcp_mem cannot be read inside a container; read it on the host.
+if [[ -r /proc/sys/net/ipv4/tcp_mem ]]; then
+	echo "TCP memory: the kernel starts to save at $(($(awk '{print $2}' /proc/sys/net/ipv4/tcp_mem) * 4096 / 1000000)) MB" >&2
+fi
 for rtt in $RTTS; do
 	for buffers in $BUFFERS; do
 		for loss in $LOSSES; do
-			for streams in $STREAMS; do
-				run_one "$rtt" "$buffers" "$streams" "$loss" ||
-					echo "run rtt=$rtt $buffers loss=$loss s=$streams failed" >&2
+			for pacing in $PACING; do
+				for streams in $STREAMS; do
+					for block in $BLOCKS; do
+						for write in $WRITES; do
+							# one stream uses no blocks: run it once
+							if [[ "$streams" == 1 || "$block" == 0 ]]; then
+								[[ "$write" == "${WRITES%% *}" ]] || continue
+								[[ "$streams" != 1 || "$block" == "${BLOCKS%% *}" ]] || continue
+							fi
+							for ((n = 0; n < REPEAT; n++)); do
+								run_one "$rtt" "$buffers" "$streams" "$loss" "$pacing" \
+									"$([[ "$streams" == 1 ]] && echo 0 || echo "$block")" "$write" ||
+									echo "run rtt=$rtt $buffers loss=$loss s=$streams b=$block w=$write failed" >&2
+							done
+						done
+					done
+				done
 			done
 		done
 	done
