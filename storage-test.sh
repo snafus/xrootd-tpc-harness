@@ -5,7 +5,10 @@
 #   storage-test.sh DESTINATION_DIRECTORY
 #
 # DESTINATION_DIRECTORY must be on the storage to test and writable by the
-# user who runs this (not root: xrootd does not run as root).  The tests make
+# user who runs this.  xrootd does not run as root: run this as an ordinary
+# user, or as root with TPC_RUN_AS set to the user the servers are to run as
+# (xrootd -R).  The destination files then belong to that user, and the
+# directories the tests make below DESTINATION_DIRECTORY are given to it.  The tests make
 # their own directories below it and remove them.  The largest file is 2 GiB
 # unless TPC_RATE_SIZE says otherwise.
 #
@@ -33,7 +36,15 @@ HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 BATS=${BATS:-bats}
 [[ -x "${XROOTD_SRC:-}/vendor/bats/bin/bats" ]] && BATS="$XROOTD_SRC/vendor/bats/bin/bats"
 
-[[ $(id -u) != 0 ]] || { echo "run this as an ordinary user, not root"; exit 2; }
+if [[ $(id -u) == 0 ]]; then
+	# xrootd does not run as root; as root, the servers switch to another user
+	[[ -n "${TPC_RUN_AS:-}" ]] ||
+		{ echo "run this as an ordinary user, or as root with TPC_RUN_AS=USER (the user the servers run as)"; exit 2; }
+	id "$TPC_RUN_AS" >/dev/null || exit 2
+	runuser -u "$TPC_RUN_AS" -- test -x "$DEST" ||
+		{ echo "user $TPC_RUN_AS cannot reach $DEST"; exit 2; }
+	export TPC_RUN_AS
+fi
 [[ -d "$DEST" && -w "$DEST" ]] || { echo "not a writable directory: $DEST"; exit 2; }
 for program in xrootd "$BATS" python3 curl getfattr; do
 	command -v "$program" >/dev/null || { echo "not found: $program"; exit 2; }

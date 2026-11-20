@@ -25,9 +25,18 @@ launch_xrootd() {
 	local config=$1 name=$2
 	local log="$BATS_TEST_TMPDIR/$name.log"
 	local pidfile="$BATS_TEST_TMPDIR/$name.pid"
+	local -a as=()
+
+	if [[ $(id -u) == 0 ]]; then
+		# xrootd does not run as root: it switches to the user named with -R.
+		[[ -n "${TPC_RUN_AS:-}" ]] ||
+			{ echo "run as root: set TPC_RUN_AS to the user the servers are to run as" >&2; return 1; }
+		as=(-R "$TPC_RUN_AS")
+		give_to_server_user "$BATS_TEST_TMPDIR"
+	fi
 
 	(cd "$BATS_TEST_TMPDIR" && NAME=$name \
-		xrootd -b -c "$BATS_TEST_DIRNAME/$config" -l "$name.log" -s "$name.pid")
+		xrootd "${as[@]}" -b -c "$BATS_TEST_DIRNAME/$config" -l "$name.log" -s "$name.pid")
 
 	for _ in {1..200}; do
 		grep -qsE '^------ xrootd .* initialization completed' "$log" && return 0
@@ -40,6 +49,24 @@ launch_xrootd() {
 	echo "xrootd '$name' failed to start" >&2
 	[[ -f "$log" ]] && cat "$log" >&2
 	return 1
+}
+
+# give_to_server_user DIRECTORY: when the tests run as root, hand a directory
+# to the user the servers run as, and let that user reach it.
+give_to_server_user() {
+	local dir=$1 top
+
+	[[ $(id -u) == 0 && -n "${TPC_RUN_AS:-}" ]] || return 0
+	chown -R "$TPC_RUN_AS" "$dir"
+	# bats makes its temporary directories (RUN/test/N) for root alone; open
+	# those, and nothing outside them.  For the group as well: a server
+	# started with -R keeps the groups of root, so the group bits apply to it.
+	top=$(dirname "$(dirname "$BATS_TEST_TMPDIR")")
+	while [[ "$dir" == "$top"* ]]; do
+		chmod go+rx "$dir"
+		dir=$(dirname "$dir")
+	done
+	return 0
 }
 
 # A daemon that exited stays a zombie until its parent reaps it, and in a

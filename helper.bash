@@ -50,6 +50,7 @@ launch_destination() {
 	dst_config=${1:-dst.cfg}
 	[[ $# -gt 0 || -z "${TPC_CHECKSUM:-}" ]] || dst_config=dst-cksrt.cfg
 	mkdir -p "$BATS_TEST_TMPDIR/xrootd_dst" "$(dst_data_dir)"
+	give_to_server_user "$(dst_data_dir)"
 	DATA=$(dst_data_dir) PORT=$DST_PORT launch_xrootd "$dst_config" xrootd_dst
 }
 

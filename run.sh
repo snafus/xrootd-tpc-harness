@@ -13,6 +13,8 @@
 #   BATS           the bats program to use (1.11 or later)
 #   TPC_DEST_DIR   directory for the destination files, to test another
 #                  storage (for example a CephFS mount)
+#   TPC_RUN_AS     when the tests are run as root: the user the servers run as
+#                  (xrootd does not run as root)
 #   TPC_LOG_DIR    directory in which to keep the output of every test, also
 #                  when the run succeeds (default: a temporary directory,
 #                  kept only when the run fails)
