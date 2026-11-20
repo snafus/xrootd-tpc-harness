@@ -121,7 +121,9 @@ print("%08x" % value)' "$(dst_file "$1")"
 	[[ "$(reported_adler32 file_dst)" == "$stored" ]] ||
 		fail "the server did not report the stored value: $(reported_adler32 file_dst)"
 
-	touch "$(dst_file file_dst)"
+	# The comparison is in whole seconds, and the pull may have ended within
+	# this second: move the time by a minute.
+	touch -d "@$(($(stat -c %Y "$(dst_file file_dst)") + 60))" "$(dst_file file_dst)"
 	before=$(destination_bytes_read)
 	[[ "$(reported_adler32 file_dst)" == "$(adler32_of_file file_dst)" ]] ||
 		fail "after a change of modification time the server reports $(reported_adler32 file_dst)"
