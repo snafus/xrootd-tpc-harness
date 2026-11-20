@@ -1,2 +1,5 @@
 local.env
 __pycache__/
+storage-results-*
+storage-report.txt
+tmp-dest/

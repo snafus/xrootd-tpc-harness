@@ -25,6 +25,8 @@ python3, curl and getfattr.
 | `checksum.bats` | The checksum XRootD computes while the file is written: stored at the end of a pull, and different from the source's when the source sent wrong data. |
 | `markers.bats` | The performance markers sent during a pull list each connection once. |
 | `setup-failure.bats` | The destination answers with a complete error response when it cannot prepare a multi-stream pull. The failure is made by `shims/no_duphandle.c`, loaded in front of libcurl; needs a C compiler, skipped without one. |
+| `storage.bats` | Observations of the storage under the destination, written to a report file: space used during a copy, what a failed copy and a killed server leave, and rates. Not part of `run.sh`. |
+| `storage-test.sh` | One command to test a storage (for example a CephFS mount) with the installed XRootD: the suites of `run.sh full`, the block-write passes when the build has them, and `storage.bats`. Collects the results in one archive. |
 | `run.sh` | Runs the quick or the full suite and compares the failures with `known-failures.txt`. |
 | `known-failures.txt` | Tests that fail today because of a known defect. |
 | `bdp/measure.sh` | Throughput of a pull over an emulated long path (delay and rate limit), by number of streams. |

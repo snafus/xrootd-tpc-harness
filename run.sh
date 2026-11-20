@@ -13,6 +13,9 @@
 #   BATS           the bats program to use (1.11 or later)
 #   TPC_DEST_DIR   directory for the destination files, to test another
 #                  storage (for example a CephFS mount)
+#   TPC_LOG_DIR    directory in which to keep the output of every test, also
+#                  when the run succeeds (default: a temporary directory,
+#                  kept only when the run fails)
 #   TPC_CHECKSUM   if set, the destination computes a checksum while it writes
 #                  (ofs.cksrt) and every successful pull must have stored the
 #                  right one.  The full run does this by itself for the matrix
@@ -39,7 +42,12 @@ fi
 for program in xrootd "$BATS" python3 curl getfattr; do
 	command -v "$program" >/dev/null || { echo "not found: $program"; exit 2; }
 done
-LOG=$(mktemp -d /tmp/tpc-tests.XXXXXX)
+if [[ -n "${TPC_LOG_DIR:-}" ]]; then
+	LOG=$TPC_LOG_DIR
+	mkdir -p "$LOG"
+else
+	LOG=$(mktemp -d /tmp/tpc-tests.XXXXXX)
+fi
 SUITES=(matrix.bats faults.bats ordering.bats checksum.bats markers.bats setup-failure.bats)
 CHECKSUM_SUITES=(matrix.bats faults.bats)
 status=0
@@ -131,7 +139,7 @@ fi
 
 if [[ $status == 0 ]]; then
 	echo "OK in $((SECONDS - began)) s"
-	rm -rf "$LOG"
+	[[ -n "${TPC_LOG_DIR:-}" ]] || rm -rf "$LOG"
 else
 	echo "FAILED in $((SECONDS - began)) s; logs kept in $LOG"
 fi
