@@ -150,3 +150,26 @@ print("%08x" % value)' "$(dst_file "$1")"
 	((second - first < MIB)) || fail "the second query read $((second - first)) bytes"
 	has_stored_checksum file_dst || fail "the computed checksum was not stored"
 }
+
+# xrootd.chksum can name an external program.  The real-time checksum is
+# still computed and stored, but the server then gives every query to the
+# program and never looks at the stored value itself: the program has to.
+@test "with an external checksum program the checksum is stored but every query runs the program" {
+	cat >checksum-program.sh <<'PROGRAM'
+#!/bin/bash
+echo "$*" >>"$(dirname "$0")/checksum-program.log"
+echo deadbeef
+PROGRAM
+	chmod +x checksum-program.sh
+
+	PROG="$BATS_TEST_TMPDIR/checksum-program.sh" launch_destination dst-cksrt-prog.cfg
+	pull 4
+	[[ "$outcome" == success && "$content" == ok ]] || fail "the pull failed: $message"
+	has_stored_checksum file_dst || fail "no checksum was stored with the file"
+	[[ ! -e checksum-program.log ]] || fail "the program was run during the pull"
+
+	[[ "$(reported_adler32 file_dst)" == deadbeef ]] || fail "the answer is not the program's"
+	[[ "$(reported_adler32 file_dst)" == deadbeef ]] || fail "the answer is not the program's"
+	(($(wc -l <checksum-program.log) == 2)) || fail "the program ran $(wc -l <checksum-program.log) times for 2 queries"
+	[[ "$(head -1 checksum-program.log)" == /file_dst ]] || fail "unexpected arguments: $(head -1 checksum-program.log)"
+}
