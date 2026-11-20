@@ -35,8 +35,11 @@ launch_xrootd() {
 		give_to_server_user "$BATS_TEST_TMPDIR"
 	fi
 
+	# XROOTD_WRAPPER: a command to start xrootd under, for example
+	# "setarch x86_64 -R" for a build with the thread sanitizer.
+	# shellcheck disable=SC2086
 	(cd "$BATS_TEST_TMPDIR" && NAME=$name \
-		xrootd "${as[@]}" -b -c "$BATS_TEST_DIRNAME/$config" -l "$name.log" -s "$name.pid")
+		${XROOTD_WRAPPER:-} xrootd "${as[@]}" -b -c "$BATS_TEST_DIRNAME/$config" -l "$name.log" -s "$name.pid")
 
 	for _ in {1..200}; do
 		grep -qsE '^------ xrootd .* initialization completed' "$log" && return 0

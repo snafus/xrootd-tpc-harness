@@ -3,3 +3,4 @@ __pycache__/
 storage-results-*
 storage-report.txt
 tmp-dest/
+tsan-logs/

@@ -20,6 +20,10 @@ RUN dnf install -y dnf-plugins-core epel-release \
 # Needed by bdp/measure.sh to turn off segmentation offload on the test link.
 RUN dnf install -y ethtool && dnf clean all
 
+# For a build with the thread sanitizer (-fsanitize=thread), used to look for
+# data races in the code that runs a pull.
+RUN dnf install -y libtsan && dnf clean all
+
 # The tests refuse to run as root; use an unprivileged user whose uid matches
 # the owner of the bind-mounted source tree.
 ARG UID=1000

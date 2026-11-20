@@ -37,6 +37,9 @@
 #   TUNED_MB  largest socket buffer of the "tuned" setting, in MB (default 256)
 #   TLS       1: the destination pulls over HTTPS (default 0).  A certificate
 #             authority and a host certificate are made for the run.
+#   THREADS   1: one thread for each stream at the destination, test build only
+#             (XRD_TPC_EXP_THREADS; default 0).  WRITE_LOCK=0 lets the threads
+#             write to the file concurrently (XRD_TPC_EXP_WRITE_LOCK; default 1)
 #   CURL_BUFFER_KIB  size of libcurl's receive buffer at the destination, test
 #             build only (XRD_TPC_EXP_CURL_BUFFER_KIB; default 0, libcurl's own)
 #
@@ -238,6 +241,7 @@ launch() { # NAMESPACE NAME PORT
 	(cd "$WORK" && as_user "$ns" env RUN="$WORK" NAME="$name" PORT="$port" \
 		XRD_TPC_EXP_BLOCK_MIB="${EXP_BLOCK:-0}" XRD_TPC_EXP_WRITE_MIB="${EXP_WRITE:-16}" \
 		XRD_TPC_EXP_CURL_BUFFER_KIB="$CURL_BUFFER_KIB" \
+		XRD_TPC_EXP_THREADS="$THREADS" XRD_TPC_EXP_WRITE_LOCK="$WRITE_LOCK" \
 		xrootd -b -c "$WORK/server.cfg" -l "$WORK/$name.log" -s "$WORK/$name.pid")
 	for _ in {1..200}; do
 		grep -qsE '^------ xrootd .* initialization completed' "$WORK/$name.log" && return 0
@@ -378,11 +382,11 @@ run_one() { # RTT BUFFERS STREAMS LOSS PACING BLOCK WRITE
 		cp "$WORK/$tag.router" "$(dirname "$RESULTS")/" 2>/dev/null
 	fi
 
-	printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$rtt" "$buffers" "$loss" "${QUEUE_MS:-deep}" \
+	printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$rtt" "$buffers" "$loss" "${QUEUE_MS:-deep}" \
 		"$pacing" "$block" "$write" "$streams" \
 		"$(summarise "$WORK/$tag.markers" "$WORK/$tag.cwnd")" \
 		"$(cpu_use "$WORK/$tag.dst0" "$WORK/$tag.dst1" "$elapsed")" \
-		"$(cpu_use "$WORK/$tag.src0" "$WORK/$tag.src1" "$elapsed")" "${pruned:-?}" "$mem_peak" "$TLS" "$CURL_BUFFER_KIB" | tee -a "$RESULTS"
+		"$(cpu_use "$WORK/$tag.src0" "$WORK/$tag.src1" "$elapsed")" "${pruned:-?}" "$mem_peak" "$TLS" "$CURL_BUFFER_KIB" "$THREADS" "$WRITE_LOCK" | tee -a "$RESULTS"
 	cp "$WORK/$tag.markers" "$WORK/$tag.cwnd" "$(dirname "$RESULTS")/" 2>/dev/null
 	return 0
 }
@@ -391,7 +395,9 @@ REPEAT=${REPEAT:-1}
 TUNED_MB=${TUNED_MB:-256}
 TLS=${TLS:-0}
 CURL_BUFFER_KIB=${CURL_BUFFER_KIB:-0}
-printf 'rtt_ms\tbuffers\tloss_pct\tqueue_ms\tpacing\tblock_mib\twrite_mib\tstreams\tMB/s_overall\tMB/s_after_10s\tMB/s_last_30s\tconnections\tcwnd_median\tcwnd_min\tretrans_pct\tdst_thread_cpu\tdst_cpu\tsrc_thread_cpu\tsrc_cpu\tdst_rcv_pruned\ttcp_mem_peak_mb\ttls\tcurl_buffer_kib\n' >"$RESULTS"
+THREADS=${THREADS:-0}
+WRITE_LOCK=${WRITE_LOCK:-1}
+printf 'rtt_ms\tbuffers\tloss_pct\tqueue_ms\tpacing\tblock_mib\twrite_mib\tstreams\tMB/s_overall\tMB/s_after_10s\tMB/s_last_30s\tconnections\tcwnd_median\tcwnd_min\tretrans_pct\tdst_thread_cpu\tdst_cpu\tsrc_thread_cpu\tsrc_cpu\tdst_rcv_pruned\ttcp_mem_peak_mb\ttls\tcurl_buffer_kib\tthreads\twrite_lock\n' >"$RESULTS"
 # net.ipv4.tcp_mem cannot be read inside a container; read it on the host.
 if [[ -r /proc/sys/net/ipv4/tcp_mem ]]; then
 	echo "TCP memory: the kernel starts to save at $(($(awk '{print $2}' /proc/sys/net/ipv4/tcp_mem) * 4096 / 1000000)) MB" >&2
