@@ -65,3 +65,88 @@ pull() {
 	[[ -n "$(reported_adler32 file_dst)" ]] || fail "the destination reported no checksum"
 	[[ "$(reported_adler32 file_dst)" != "$(expected_adler32 "$SIZE")" ]]
 }
+
+# Bytes the destination server has read so far, from files and sockets alike.
+destination_bytes_read() {
+	awk '$1 == "rchar:" { print $2 }' "/proc/$(awk '{ print }' "$BATS_TEST_TMPDIR/xrootd_dst.pid")/io"
+}
+
+# The adler32 of a destination file as it is now, computed here.
+adler32_of_file() {
+	python3 -c '
+import sys, zlib
+value = 1
+with open(sys.argv[1], "rb") as f:
+    for block in iter(lambda: f.read(1 << 20), b""):
+        value = zlib.adler32(block, value)
+print("%08x" % value)' "$(dst_file "$1")"
+}
+
+# A client asks for the checksum with a HEAD request and Want-Digest.  The
+# answer must come from the value stored at the end of the pull, not from
+# reading the file again.
+@test "real-time checksum: a query is answered from the stored value, without reading the file" {
+	local before after
+
+	launch_destination dst-cksrt.cfg
+	pull 4
+	assert_pull_succeeded
+	has_stored_checksum file_dst || fail "no checksum was stored with the file"
+
+	before=$(destination_bytes_read)
+	[[ "$(reported_adler32 file_dst)" == "$(expected_adler32 "$SIZE")" ]] ||
+		fail "the reported checksum is wrong: $(reported_adler32 file_dst)"
+	after=$(destination_bytes_read)
+	((after - before < MIB)) ||
+		fail "the server read $((after - before)) bytes to answer; the file is $SIZE bytes"
+}
+
+# The same, shown another way: the file is changed behind the back of the
+# server and its modification time put back.  The server still reports the
+# stored value, which no longer matches the content.  Once the modification
+# time differs from the one stored with the checksum, the server computes the
+# checksum again.
+@test "real-time checksum: the stored value is used until the modification time changes" {
+	local stored before after
+
+	launch_destination dst-cksrt.cfg
+	pull 4
+	assert_pull_succeeded
+	stored=$(expected_adler32 "$SIZE")
+
+	touch -r "$(dst_file file_dst)" saved-times
+	printf 'XYZ' | dd of="$(dst_file file_dst)" bs=1 seek=12345 conv=notrunc status=none
+	touch -r saved-times "$(dst_file file_dst)"
+	[[ "$(adler32_of_file file_dst)" != "$stored" ]] || fail "the file was not changed"
+	[[ "$(reported_adler32 file_dst)" == "$stored" ]] ||
+		fail "the server did not report the stored value: $(reported_adler32 file_dst)"
+
+	touch "$(dst_file file_dst)"
+	before=$(destination_bytes_read)
+	[[ "$(reported_adler32 file_dst)" == "$(adler32_of_file file_dst)" ]] ||
+		fail "after a change of modification time the server reports $(reported_adler32 file_dst)"
+	after=$(destination_bytes_read)
+	((after - before >= SIZE)) ||
+		fail "the server read only $((after - before)) bytes to compute the checksum again"
+}
+
+# Without real-time checksums the first query makes the server read the whole
+# file; it then stores the result, and the second query is answered from it.
+@test "without real-time checksums the first query reads the file and the second does not" {
+	local start first second
+
+	launch_destination dst-cks.cfg
+	pull 4
+	assert_pull_succeeded
+	! has_stored_checksum file_dst || fail "a checksum is stored before any query"
+
+	start=$(destination_bytes_read)
+	[[ "$(reported_adler32 file_dst)" == "$(expected_adler32 "$SIZE")" ]]
+	first=$(destination_bytes_read)
+	[[ "$(reported_adler32 file_dst)" == "$(expected_adler32 "$SIZE")" ]]
+	second=$(destination_bytes_read)
+
+	((first - start >= SIZE)) || fail "the first query read only $((first - start)) bytes"
+	((second - first < MIB)) || fail "the second query read $((second - first)) bytes"
+	has_stored_checksum file_dst || fail "the computed checksum was not stored"
+}
