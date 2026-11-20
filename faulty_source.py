@@ -62,18 +62,19 @@ import json
 import random
 import re
 import socket
+import socketserver
 import struct
 import sys
 import threading
 import time
 import zlib
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import parse_qs, urlsplit
 
 BLOCK = 1 << 20
 RANGE = 16 * BLOCK
 CHUNK = 256 * 1024
-_PATTERN = random.Random(20261118).randbytes(BLOCK)
+_PATTERN = random.Random(20261118).getrandbits(BLOCK * 8).to_bytes(BLOCK, "little")
 
 
 def content(offset, length):
@@ -373,14 +374,17 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(b"0\r\n\r\n")
 
 
-class Server(ThreadingHTTPServer):
+# Not http.server.ThreadingHTTPServer: that needs Python 3.7, and the test host
+# may only have 3.6.
+class Server(socketserver.ThreadingMixIn, HTTPServer):
     daemon_threads = True
     request_queue_size = 256
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    commands = parser.add_subparsers(dest="command", required=True)
+    commands = parser.add_subparsers(dest="command")
+    commands.required = True
 
     serve = commands.add_parser("serve")
     serve.add_argument("--port", type=int, default=8080)
