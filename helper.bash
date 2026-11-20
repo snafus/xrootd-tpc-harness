@@ -70,11 +70,12 @@ stored_checksum_state() {
 	fi
 }
 
-# Stop the source and the destination and remove what the test stored outside
-# its temporary directory.
+# Stop the source and the destination and remove the destination files.  bats
+# keeps the temporary directory of every test until the whole run ends, so
+# files left there add up to many gigabytes.
 stop_servers() {
 	kill_pid_files
-	[[ -z "${TPC_DEST_DIR:-}" ]] || rm -rf "$(dst_data_dir)"
+	rm -rf "$(dst_data_dir)"
 }
 
 # Whether XRootD has stored an adler32 with a destination file.
