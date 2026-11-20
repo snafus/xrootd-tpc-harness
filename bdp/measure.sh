@@ -35,6 +35,10 @@
 #   WRITES    write sizes of the block-write test build, in MiB (default "16")
 #   REPEAT    number of runs of each case (default 1)
 #   TUNED_MB  largest socket buffer of the "tuned" setting, in MB (default 256)
+#   TLS       1: the destination pulls over HTTPS (default 0).  A certificate
+#             authority and a host certificate are made for the run.
+#   CURL_BUFFER_KIB  size of libcurl's receive buffer at the destination, test
+#             build only (XRD_TPC_EXP_CURL_BUFFER_KIB; default 0, libcurl's own)
 #
 # The memory TCP may use is one budget for the whole kernel (net.ipv4.tcp_mem),
 # and here it holds both ends of every connection and the data in flight.
@@ -207,14 +211,34 @@ setup_network() { # RTT_MS BUFFERS LOSS PACING
 	fi
 }
 
+# A certificate authority and a certificate for the source, and the lines of
+# configuration that make both servers use them.
+make_tls() {
+	if [[ ! -s "$WORK/host.pem" ]]; then
+		openssl req -x509 -newkey rsa:2048 -nodes -keyout "$WORK/ca.key" -out "$WORK/ca.pem" \
+			-subj "/CN=TPC measurement CA" -days 3 \
+			-addext "basicConstraints=critical,CA:TRUE" -addext "keyUsage=critical,keyCertSign,cRLSign" 2>/dev/null
+		openssl req -newkey rsa:2048 -nodes -keyout "$WORK/host.key" -out "$WORK/host.csr" \
+			-subj "/CN=$SRC_IP" 2>/dev/null
+		openssl x509 -req -in "$WORK/host.csr" -CA "$WORK/ca.pem" -CAkey "$WORK/ca.key" -CAcreateserial \
+			-out "$WORK/host.pem" -days 3 -extfile <(printf 'subjectAltName=IP:%s\nbasicConstraints=CA:FALSE\n' "$SRC_IP") 2>/dev/null
+		chmod 600 "$WORK/host.key"
+		chown "$USER_NAME" "$WORK"/host.* "$WORK"/ca.*
+	fi
+	printf 'xrd.tls %s %s\nxrd.tlsca certfile %s\n' "$WORK/host.pem" "$WORK/host.key" "$WORK/ca.pem" >>"$WORK/server.cfg"
+}
+
 launch() { # NAMESPACE NAME PORT
 	local ns=$1 name=$2 port=$3
 
 	mkdir -p "$WORK/$name"
 	chown -R "$USER_NAME" "$WORK"
+	cp "$HERE/mirage.cfg" "$WORK/server.cfg"
+	[[ "$TLS" == 1 ]] && make_tls
 	(cd "$WORK" && as_user "$ns" env RUN="$WORK" NAME="$name" PORT="$port" \
 		XRD_TPC_EXP_BLOCK_MIB="${EXP_BLOCK:-0}" XRD_TPC_EXP_WRITE_MIB="${EXP_WRITE:-16}" \
-		xrootd -b -c "$HERE/mirage.cfg" -l "$WORK/$name.log" -s "$WORK/$name.pid")
+		XRD_TPC_EXP_CURL_BUFFER_KIB="$CURL_BUFFER_KIB" \
+		xrootd -b -c "$WORK/server.cfg" -l "$WORK/$name.log" -s "$WORK/$name.pid")
 	for _ in {1..200}; do
 		grep -qsE '^------ xrootd .* initialization completed' "$WORK/$name.log" && return 0
 		sleep 0.05
@@ -311,6 +335,8 @@ run_one() { # RTT BUFFERS STREAMS LOSS PACING BLOCK WRITE
 	teardown
 	drain
 	rm -rf "$WORK/xrootd_src" "$WORK/xrootd_dst" "$WORK"/*.log "$WORK"/*.pid "$WORK"/*.mem
+	local scheme=http
+	[[ "$TLS" == 1 ]] && scheme=https
 	setup_network "$rtt" "$buffers" "$loss" "$pacing" || { echo "cannot set up the network" >&2; return 1; }
 	launch src xrootd_src "$SRC_PORT" || return 1
 	launch dst xrootd_dst "$DST_PORT" || return 1
@@ -333,7 +359,7 @@ run_one() { # RTT BUFFERS STREAMS LOSS PACING BLOCK WRITE
 	thread_ticks xrootd_src >"$WORK/$tag.src0"
 	began=$(date +%s.%N)
 	as_user dst curl -sS -N --max-time "$DURATION" -X COPY \
-		-H "Source: http://$SRC_IP:$SRC_PORT/big" "${header[@]}" \
+		-H "Source: $scheme://$SRC_IP:$SRC_PORT/big" "${header[@]}" \
 		"http://$DST_IP:$DST_PORT/out" >"$WORK/$tag.markers" 2>"$WORK/$tag.err"
 	elapsed=$(python3 -c "import sys, time; print(time.time() - float(sys.argv[1]))" "$began")
 	thread_ticks xrootd_dst >"$WORK/$tag.dst1"
@@ -352,18 +378,20 @@ run_one() { # RTT BUFFERS STREAMS LOSS PACING BLOCK WRITE
 		cp "$WORK/$tag.router" "$(dirname "$RESULTS")/" 2>/dev/null
 	fi
 
-	printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$rtt" "$buffers" "$loss" "${QUEUE_MS:-deep}" \
+	printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$rtt" "$buffers" "$loss" "${QUEUE_MS:-deep}" \
 		"$pacing" "$block" "$write" "$streams" \
 		"$(summarise "$WORK/$tag.markers" "$WORK/$tag.cwnd")" \
 		"$(cpu_use "$WORK/$tag.dst0" "$WORK/$tag.dst1" "$elapsed")" \
-		"$(cpu_use "$WORK/$tag.src0" "$WORK/$tag.src1" "$elapsed")" "${pruned:-?}" "$mem_peak" | tee -a "$RESULTS"
+		"$(cpu_use "$WORK/$tag.src0" "$WORK/$tag.src1" "$elapsed")" "${pruned:-?}" "$mem_peak" "$TLS" "$CURL_BUFFER_KIB" | tee -a "$RESULTS"
 	cp "$WORK/$tag.markers" "$WORK/$tag.cwnd" "$(dirname "$RESULTS")/" 2>/dev/null
 	return 0
 }
 
 REPEAT=${REPEAT:-1}
 TUNED_MB=${TUNED_MB:-256}
-printf 'rtt_ms\tbuffers\tloss_pct\tqueue_ms\tpacing\tblock_mib\twrite_mib\tstreams\tMB/s_overall\tMB/s_after_10s\tMB/s_last_30s\tconnections\tcwnd_median\tcwnd_min\tretrans_pct\tdst_thread_cpu\tdst_cpu\tsrc_thread_cpu\tsrc_cpu\tdst_rcv_pruned\ttcp_mem_peak_mb\n' >"$RESULTS"
+TLS=${TLS:-0}
+CURL_BUFFER_KIB=${CURL_BUFFER_KIB:-0}
+printf 'rtt_ms\tbuffers\tloss_pct\tqueue_ms\tpacing\tblock_mib\twrite_mib\tstreams\tMB/s_overall\tMB/s_after_10s\tMB/s_last_30s\tconnections\tcwnd_median\tcwnd_min\tretrans_pct\tdst_thread_cpu\tdst_cpu\tsrc_thread_cpu\tsrc_cpu\tdst_rcv_pruned\ttcp_mem_peak_mb\ttls\tcurl_buffer_kib\n' >"$RESULTS"
 # net.ipv4.tcp_mem cannot be read inside a container; read it on the host.
 if [[ -r /proc/sys/net/ipv4/tcp_mem ]]; then
 	echo "TCP memory: the kernel starts to save at $(($(awk '{print $2}' /proc/sys/net/ipv4/tcp_mem) * 4096 / 1000000)) MB" >&2
