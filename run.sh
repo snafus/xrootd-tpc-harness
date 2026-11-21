@@ -50,7 +50,7 @@ if [[ -n "${TPC_LOG_DIR:-}" ]]; then
 else
 	LOG=$(mktemp -d /tmp/tpc-tests.XXXXXX)
 fi
-SUITES=(matrix.bats faults.bats ordering.bats checksum.bats markers.bats setup-failure.bats status.bats)
+SUITES=(matrix.bats faults.bats ordering.bats checksum.bats markers.bats setup-failure.bats status.bats logrecord.bats)
 CHECKSUM_SUITES=(matrix.bats faults.bats)
 status=0
 began=$SECONDS
