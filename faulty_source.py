@@ -34,6 +34,8 @@ Faults are selected per request with query parameters of the source URL, e.g.
                       the range (negative: longer; default 0, a correct answer)
     fault=corrupt     flip one bit of the byte at file offset at=
     fault=close       answer correctly but close the connection afterwards
+    fault=proxied     answer a request for the whole file correctly, but with status
+                      203 in place of 200, as a proxy that has changed the answer
     fault=shrink      HEAD reports <size>, GET serves a file by= bytes shorter
     fault=noclen      HEAD answers without Content-Length
 
@@ -154,10 +156,16 @@ class Handler(BaseHTTPRequestHandler):
     # -- helpers ---------------------------------------------------------
 
     def reply(self, status, headers=(), body=b""):
+        # 1xx, 204 and 304 never carry content (RFC 9110, Section 6.4.1).  A
+        # body sent with one of them would be read by the client as the start
+        # of the next response on the connection.
+        bodiless = status < 200 or status in (204, 304)
+        if bodiless:
+            body = b""
         self.send_response(status)
         for name, value in headers:
             self.send_header(name, value)
-        if not any(name.lower() == "content-length" for name, _ in headers):
+        if not bodiless and not any(name.lower() == "content-length" for name, _ in headers):
             self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         if body and self.command != "HEAD":
@@ -332,6 +340,8 @@ class Handler(BaseHTTPRequestHandler):
             length = max(0, length - int(query.get("by", 0)))
 
         status = 206 if ranged else 200
+        if active and fault == "proxied" and not ranged:
+            status = 203
         record["status"] = status
         self.send_response(status)
         for name, value in headers:
